@@ -6,8 +6,10 @@ A production-ready Gradio web application that convenes a 4-agent AI tribunal
 (LEX-01, CTX-02, ETH-03, CHR-04) to deliberate on an organization's policy
 rulebook against a manually narrated case.
 
-All AI inference is performed through the OpenAI-compatible SDK pointed at
-ModelScope's inference endpoint. No API key is ever hard-coded.
+All inference runs on the ModelScope OpenAI-compatible endpoint with FOUR
+approved models routed per-persona by default (with automatic fallback), and a
+pure SVG/CSS "floating-limb chibi astro-bot" stage. No API key is ever
+hard-coded.
 """
 
 import html
@@ -25,6 +27,7 @@ from openai import OpenAI
 
 INFERENCE_BASE_URL = "https://api-inference.modelscope.ai/v1"
 
+# The four approved ModelScope models (the only IDs ever offered to the UI).
 MODELS = [
     "deepseek-ai/DeepSeek-V4-Pro-0813",
     "zai-org/GLM-5.2",
@@ -32,56 +35,79 @@ MODELS = [
     "stepfun-ai/Step-3.5-Flash",
 ]
 
-DEFAULT_MODEL = MODELS[0]
-
 MODEL_SHORT = {
-    "deepseek-ai/DeepSeek-V4-Pro-0813": "DeepSeek-V4",
+    "deepseek-ai/DeepSeek-V4-Pro-0813": "DeepSeek-V4-Pro",
     "zai-org/GLM-5.2": "GLM-5.2",
     "Qwen/Qwen3.8-27B": "Qwen3.8-27B",
-    "stepfun-ai/Step-3.5-Flash": "Step-3.5",
+    "stepfun-ai/Step-3.5-Flash": "Step-3.5-Flash",
 }
 
-BOT_ROLES = ["LEX-01", "CTX-02", "ETH-03", "CHR-04"]
+# Fallback pool used when a primary route times out / rate-limits.
+FALLBACK_MODELS = ["zai-org/GLM-5.2", "Qwen/Qwen3.8-27B"]
 
-# Canonical air-gapped distribution of the 4 approved models across the council.
-DISTRIBUTED_MODEL_MAP = {
-    "LEX-01": "zai-org/GLM-5.2",
-    "CTX-02": "deepseek-ai/DeepSeek-V4-Pro-0813",
-    "ETH-03": "stepfun-ai/Step-3.5-Flash",
-    "CHR-04": "Qwen/Qwen3.8-27B",
-}
+# Role IDs define the guest personas and their model + color + title binding.
+ORDER = ["prosecutor", "defense", "ethics", "chair"]
 
-STAGE_FOCUS_CHOICES = [
-    "All Bots Overview",
-    "1. LEX-01 Rule Check",
-    "2. CTX-02 Intent Analysis",
-    "3. ETH-03 Ethics & Precedent",
-    "4. CHR-04 Final Synthesis",
-]
-
-FOCUS_ROLE = {
-    "All Bots Overview": None,
-    "1. LEX-01 Rule Check": "LEX-01",
-    "2. CTX-02 Intent Analysis": "CTX-02",
-    "3. ETH-03 Ethics & Precedent": "ETH-03",
-    "4. CHR-04 Final Synthesis": "CHR-04",
-}
-
-THEMES = ["Cyber Tribunal", "Classic High Court", "Zen Boardroom"]
-ORIENTATIONS = ["Semicircle Tribunal", "Adversarial Arena", "Roundtable Council"]
-
-BOT_ACCENTS = {
-    "LEX-01": "#ff3b5c",  # neon crimson
-    "CTX-02": "#2ad8ff",  # neon cyan
-    "ETH-03": "#39ffa0",  # neon emerald
-    "CHR-04": "#ffd23f",  # neon gold
+BOT_NAMES = {
+    "prosecutor": "LEX-01",
+    "defense": "CTX-02",
+    "ethics": "ETH-03",
+    "chair": "CHR-04",
 }
 
 BOT_TITLES = {
-    "LEX-01": "Strict Rule-Checker",
-    "CTX-02": "Contextual & Intent Analyst",
-    "ETH-03": "Ethics & Precedent Evaluator",
-    "CHR-04": "Chief Board Chair",
+    "prosecutor": "Strict Rule-Checker",
+    "defense": "Contextual & Intent Analyst",
+    "ethics": "Ethics & Precedent Evaluator",
+    "chair": "Board Chair / Chief Synthesizer",
+}
+
+BOT_ACCENTS = {
+    "prosecutor": "#ef4444",  # crimson
+    "defense": "#14b8a6",     # teal
+    "ethics": "#f59e0b",      # amber
+    "chair": "#eab308",       # gold
+}
+
+# Active 4-model runtime routing (default behavior).
+ROLE_MODELS = {
+    "prosecutor": "Qwen/Qwen3.8-27B",
+    "defense": "stepfun-ai/Step-3.5-Flash",
+    "ethics": "zai-org/GLM-5.2",
+    "chair": "deepseek-ai/DeepSeek-V4-Pro-0813",
+}
+
+NAME_TO_ROLE = {v: k for k, v in BOT_NAMES.items()}
+ACCENTS_BY_NAME = {BOT_NAMES[k]: v for k, v in BOT_ACCENTS.items()}
+TITLES_BY_NAME = {BOT_NAMES[k]: v for k, v in BOT_TITLES.items()}
+
+THEMES = ["Classic Tribunal", "Cyber War Room", "Zen Boardroom"]
+ORIENTATIONS = ["Semicircle Tribunal", "Adversarial Arena"]
+
+THEME_KEYS = {
+    "Classic Tribunal": "classic",
+    "Cyber War Room": "cyber",
+    "Zen Boardroom": "zen",
+}
+ORIENTATION_KEYS = {
+    "Semicircle Tribunal": "semicircle",
+    "Adversarial Arena": "arena",
+}
+
+# Percent positions (x, y) for each role on the stage area.
+STAGE_POSITIONS = {
+    "Semicircle Tribunal": {
+        "prosecutor": (14, 58),
+        "defense": (38, 26),
+        "ethics": (62, 26),
+        "chair": (86, 58),
+    },
+    "Adversarial Arena": {
+        "prosecutor": (14, 45),
+        "defense": (86, 45),
+        "ethics": (50, 26),
+        "chair": (50, 70),
+    },
 }
 
 VERDICT_CLASSES = [
@@ -95,7 +121,7 @@ VERDICT_CLASSES = [
 # ---------------------------------------------------------------------------
 
 PRESETS = {
-    "Corporate Data Privacy Breach": {
+    "Corporate Data Security": {
         "rulebook": """SECTION A — DATA PROTECTION & PRIVACY
 
 A.1  Purpose
@@ -142,7 +168,7 @@ Two weeks later the vendor flagged unusual access. Priya claims she acted from a
 place of loyalty and deadline pressure, never intended harm, and instantly
 remedied the error herself.""",
     },
-    "University Academic Integrity AI Usage": {
+    "Campus Academic Integrity": {
         "rulebook": """SECTION 2 — ACADEMIC INTEGRITY
 
 2.1  All submitted work must be the student's own. Submission of work generated
@@ -177,7 +203,7 @@ work his own. He argues the syllabus wording was vague, he understood the tool
 as permitted, and that he never intended to cheat. The marker flagged the essay
 via detection software.""",
     },
-    "E-Commerce Seller Policy Violation": {
+    "E-Commerce Seller Policy": {
         "rulebook": """POLICY 7 — MARKETPLACE PROHIBITED CONDUCT
 
 7.1  PROHIBITED ACTIVITIES
@@ -233,7 +259,6 @@ def _extract_json(text: str):
     if not text:
         raise ValueError("Empty model response.")
     text = text.strip()
-    # Strip markdown code fences.
     fence = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL)
     if fence:
         text = fence.group(1).strip()
@@ -242,155 +267,6 @@ def _extract_json(text: str):
     if start == -1 or end == -1 or end <= start:
         raise ValueError("No JSON object found in model response.")
     return json.loads(text[start : end + 1])
-
-
-# ---------------------------------------------------------------------------
-# The deliberation prompt & call
-# ---------------------------------------------------------------------------
-
-def build_deliberation_prompt(rulebook: str, case_text: str, prior_context: str = "") -> str:
-    prior = ""
-    if prior_context.strip():
-        prior = (
-            "\n\n=== ADDITIONAL CONTEXT PREVIOUSLY PROVIDED BY THE HUMAN ===\n"
-            + prior_context.strip()
-        )
-    return f"""You are the "AegisBoard Tribunal Runtime" coordinating FOUR distinct AI personas
-who must deliberate on a policy case. Produce ONE single valid JSON object (no
-markdown fences, no commentary outside the JSON) with the exact schema below.
-
-=== THE ORGANIZATION POLICY / RULEBOOK ===
-{rulebook}
-
-=== THE MANUAL CASE NARRATIVE ===
-{case_text}{prior}
-
-=== MANDATORY FIELD DEFINITIONS ===
-- "bots": a JSON array with EXACTLY 4 objects, one per persona, in this order.
-  Each object schema:
-    "role": one of "LEX-01", "CTX-02", "ETH-03", "CHR-04",
-    "title": the persona's short title,
-    "stance": one of "PROSECUTION", "DEFENSE", "FAIRNESS", "SYNTHESIS",
-    "stance_score": a float from 0.0 to 1.0 indicating how strongly the persona
-        believes a VERIFICATION worthy of this case, 1.0 = fully substantiated,
-        0.0 = fully cleared. (For a prosecutor this is near 1.0; for a skeptical
-        defense it may be low.)
-    "speech": 1-3 sentence comic-style argument in the persona's voice,
-    "cited_clauses": array of EXACT quoted sub-strings from the rulebook above
-        that the persona relies on (verbatim, no paraphrase),
-    "objection_target": role it directly disputes, or null,
-    "agreement_target": role it agrees with, or null,
-    "conclusion": one concise sentence stating the persona's bottom line.
-
-- "chair": the CHR-04 synthesizer object with:
-    "speech": 2-4 sentences of moderation that EXPLICITLY weigh CTX-02 and
-        ETH-03 against LEX-01,
-    "clarifying_questions": EXACTLY 2 specific questions to the human user
-        that would materially change the verdict if answered.
-
-- "verdict": object with:
-    "classification": EXACTLY one of ["SUBSTANTIATED VIOLATION",
-        "PROCEDURAL BREACH ONLY", "UNSUBSTANTIATED / CLEARED"],
-    "confidence": float 0..1 (consensus confidence),
-    "severity_tier": one of "Low", "Moderate", "High", "Critical",
-    "primary_action": one specific, decisive sanction OR exoneration mandated
-        by the rulebook (single clear sentence),
-    "remediation_plan": 2-4 bullet-like sentences (separated by " || ") on the
-        required remediation and safeguards,
-    "vulnerability": describe the fuzzy/poorly-written rule(s) exposed by this
-        debate,
-    "suggested_rewrite": an exact proposed rewritten clause text,
-    "role_matrix": object mapping "LEX-01", "CTX-02", "ETH-03" to their
-        one-sentence final conclusions.
-
-IMPORTANT RULES:
-1. Every "cited_clauses" entry MUST be a verbatim substring of the rulebook.
-2. The verdict must be internally consistent with the strongest arguments.
-3. CHR-04 must hand down a CONCLUSIVE verdict, not defer.
-4. Return ONLY the JSON object.
-"""
-
-
-def run_tribunal(
-    rulebook: str,
-    case_text: str,
-    model: str,
-    api_key: str,
-    prior_context: str = "",
-):
-    """Perform the structured multi-agent deliberation and return parsed JSON."""
-    client = build_client(resolve_api_key(api_key))
-    prompt = build_deliberation_prompt(rulebook, case_text, prior_context)
-    try:
-        resp = client.chat.completions.create(
-            model=model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a meticulous legal/policy deliberation engine. "
-                        "You always output a single valid JSON object and never "
-                        "invent clauses that are not present in the rulebook."
-                    ),
-                },
-                {"role": "user", "content": prompt},
-            ],
-            temperature=0.35,
-            max_tokens=3000,
-        )
-        content = resp.choices[0].message.content
-        return _extract_json(content)
-    except Exception as exc:  # noqa: BLE001 — surface cleanly to UI
-        raise RuntimeError(f"Tribunal inference failed: {exc}") from exc
-
-
-# ---------------------------------------------------------------------------
-# Optional distributed multi-model deliberation
-# ---------------------------------------------------------------------------
-
-BOT_PERSONAS = {
-    "LEX-01": {
-        "title": "Strict Rule-Checker",
-        "system": (
-            "You are LEX-01, the AegisBoard Strict Rule-Checker. You enforce the "
-            "letter of the policy, are meticulous and skeptical, and prosecute any "
-            "technical breach. You always cite clauses verbatim."
-        ),
-        "mission": (
-            "Parse the rulebook literally and decide whether the case constitutes a "
-            "breach. Lean toward prosecution when the plain text is violated."
-        ),
-    },
-    "CTX-02": {
-        "title": "Contextual & Intent Analyst",
-        "system": (
-            "You are CTX-02, the AegisBoard Contextual & Intent Analyst. You weigh "
-            "human motivation, context, and ambiguity, and often defend the subject "
-            "against overly literal readings."
-        ),
-        "mission": (
-            "Analyze intent, context, and ambiguity. Decide whether the plain text "
-            "should be tempered by intent and circumstance."
-        ),
-    },
-    "ETH-03": {
-        "title": "Ethics & Precedent Evaluator",
-        "system": (
-            "You are ETH-03, the AegisBoard Ethics & Precedent Evaluator. You reason "
-            "about fairness, proportionality, precedent, and ethical consequences."
-        ),
-        "mission": (
-            "Evaluate fairness and proportionality. Decide what outcome is ethically "
-            "sound and consistent with precedent."
-        ),
-    },
-}
-
-CHAIR_SYSTEM = (
-    "You are CHR-04, the AegisBoard Chief Board Chair. You synthesize the three "
-    "analyst positions and hand down a CONCLUSIVE, internally consistent verdict. "
-    "You never defer."
-)
 
 
 def _call_chat(client, model, system, user, temperature=0.35, max_tokens=2200):
@@ -406,8 +282,81 @@ def _call_chat(client, model, system, user, temperature=0.35, max_tokens=2200):
     return resp.choices[0].message.content
 
 
-def build_bot_prompt(role, rulebook, case_text, prior, others):
-    spec = BOT_PERSONAS[role]
+def _model_candidates(role_id):
+    primary = ROLE_MODELS[role_id]
+    candidates = [primary]
+    for fb in FALLBACK_MODELS:
+        if fb != primary and fb not in candidates:
+            candidates.append(fb)
+    return candidates
+
+
+def _call_with_fallback(client, role_id, system, user, max_tokens=2200):
+    """Call the routed model, auto-falling back on timeout / rate-limit / bad JSON."""
+    errors = []
+    for model in _model_candidates(role_id):
+        try:
+            content = _call_chat(client, model, system, user, max_tokens=max_tokens)
+            return _extract_json(content), model
+        except Exception as exc:  # noqa: BLE001 — try next route
+            errors.append(f"{model}: {exc}")
+            continue
+    raise RuntimeError(
+        f"All model routes failed for {BOT_NAMES[role_id]}: " + " | ".join(errors)
+    )
+
+
+# ---------------------------------------------------------------------------
+# Persona prompts & distributed deliberation
+# ---------------------------------------------------------------------------
+
+BOT_PERSONAS = {
+    "prosecutor": {
+        "system": (
+            "You are LEX-01, the AegisBoard Strict Rule-Checker (Prosecutor). You "
+            "enforce the letter of the policy, are meticulous and skeptical, and "
+            "prosecute any technical breach. You always cite clauses verbatim."
+        ),
+        "mission": (
+            "Parse the rulebook literally and decide whether the case constitutes a "
+            "breach. Lean toward prosecution when the plain text is violated."
+        ),
+        "stance_default": "PROSECUTION",
+    },
+    "defense": {
+        "system": (
+            "You are CTX-02, the AegisBoard Contextual & Intent Analyst (Defense). "
+            "You weigh human motivation, context, and ambiguity, and often defend "
+            "the subject against overly literal readings."
+        ),
+        "mission": (
+            "Analyze intent, context, and ambiguity. Decide whether the plain text "
+            "should be tempered by intent and circumstance."
+        ),
+        "stance_default": "DEFENSE",
+    },
+    "ethics": {
+        "system": (
+            "You are ETH-03, the AegisBoard Ethics & Precedent Evaluator. You reason "
+            "about fairness, proportionality, precedent, and ethical consequences."
+        ),
+        "mission": (
+            "Evaluate fairness and proportionality. Decide what outcome is ethically "
+            "sound and consistent with precedent."
+        ),
+        "stance_default": "FAIRNESS",
+    },
+}
+
+CHAIR_SYSTEM = (
+    "You are CHR-04, the AegisBoard Board Chair / Chief Synthesizer. You weigh the "
+    "three analyst positions, pose clarifying questions to the human, and hand down "
+    "a CONCLUSIVE, internally consistent verdict. You never defer."
+)
+
+
+def build_bot_prompt(role_id, rulebook, case_text, prior, others):
+    spec = BOT_PERSONAS[role_id]
     return f"""{spec["mission"]}
 
 Return ONE valid JSON object (no markdown fences, no commentary) with EXACTLY this schema:
@@ -415,6 +364,7 @@ Return ONE valid JSON object (no markdown fences, no commentary) with EXACTLY th
   "stance": one of "PROSECUTION", "DEFENSE", "FAIRNESS",
   "stance_score": a float 0.0-1.0 (1.0 = a violation is fully substantiated),
   "speech": 1-3 sentence comic-style argument in your persona voice,
+  "clause_ref": a compact citation label from the rulebook such as "Clause 2.2.2" or "Section A.2.1",
   "cited_clauses": an array of EXACT verbatim sub-strings from the rulebook,
   "objection_target": one of "LEX-01","CTX-02","ETH-03","CHR-04" or null,
   "agreement_target": one of "LEX-01","CTX-02","ETH-03","CHR-04" or null,
@@ -432,12 +382,13 @@ Return ONE valid JSON object (no markdown fences, no commentary) with EXACTLY th
 
 RULES:
 1. Every "cited_clauses" entry MUST be a verbatim substring of the rulebook.
-2. Return ONLY the JSON object.
+2. "clause_ref" should point to the single most decisive clause you rely on.
+3. Return ONLY the JSON object.
 """
 
 
 def build_chair_prompt(rulebook, case_text, prior, summaries):
-    return f"""You are CHR-04, the Chief Board Chair moderating a 3-agent deliberation.
+    return f"""You are CHR-04, the Board Chair / Chief Synthesizer closing a 3-agent deliberation.
 
 Return ONE valid JSON object with EXACTLY this schema:
 {{
@@ -473,238 +424,216 @@ RULES:
 """
 
 
-def run_tribunal_distributed(rulebook, case_text, model_map, api_key, prior_context=""):
-    """Deliberate via one ModelScope model per persona, then synthesize on CHR-04."""
+def _run_bot(client, role_id, rulebook, case_text, prior, summaries):
+    spec = BOT_PERSONAS[role_id]
+    others = "\n\n".join(summaries) if summaries else "(Opening argument — no prior context.)"
+    prompt = build_bot_prompt(role_id, rulebook, case_text, prior, others)
+    data, model = _call_with_fallback(client, role_id, spec["system"], prompt)
+    data["role_id"] = role_id
+    data["role"] = BOT_NAMES[role_id]
+    data["title"] = BOT_TITLES[role_id]
+    data.setdefault("stance", spec["stance_default"])
+    data.setdefault("stance_score", 0.5)
+    data.setdefault("speech", "")
+    data.setdefault("clause_ref", "")
+    data.setdefault("cited_clauses", [])
+    data.setdefault("objection_target", None)
+    data.setdefault("agreement_target", None)
+    data.setdefault("conclusion", "")
+    return data, model
+
+
+def _run_chair(client, rulebook, case_text, prior, summaries):
+    prompt = build_chair_prompt(rulebook, case_text, prior, summaries)
+    top, model = _call_with_fallback(client, "chair", CHAIR_SYSTEM, prompt, max_tokens=2600)
+    return top.get("chair", {}), top.get("verdict", {}), model
+
+
+def _deliberate_full(rulebook, case_text, api_key, prior_context=""):
+    """Run the full distributed deliberation synchronously (used by follow-ups)."""
     client = build_client(resolve_api_key(api_key))
-    prior = ""
-    if prior_context.strip():
-        prior = "\n\n=== HUMAN-PROVIDED CONTEXT ===\n" + prior_context.strip()
-
     bots = []
+    used = {}
     summaries = []
-    for role in ["LEX-01", "CTX-02", "ETH-03"]:
-        spec = BOT_PERSONAS[role]
-        others = "\n\n".join(summaries) if summaries else "(Opening argument — no prior context.)"
-        prompt = build_bot_prompt(role, rulebook, case_text, prior, others)
-        try:
-            content = _call_chat(client, model_map[role], spec["system"], prompt)
-            bot = _extract_json(content)
-        except Exception as exc:  # noqa: BLE001
-            raise RuntimeError(f"{role} reasoning failed on {model_map[role]}: {exc}") from exc
-        bot["role"] = role
-        bot["title"] = spec["title"]
-        if "stance" not in bot or not bot.get("stance"):
-            bot["stance"] = {"LEX-01": "PROSECUTION", "CTX-02": "DEFENSE", "ETH-03": "FAIRNESS"}[role]
+    for role_id in ["prosecutor", "defense", "ethics"]:
+        bot, model = _run_bot(client, role_id, rulebook, case_text, prior_context, summaries)
         bots.append(bot)
+        used[role_id] = model
         summaries.append(
-            f"{role} [{bot.get('stance', '?')}] conclusion: {bot.get('conclusion', '')}"
+            f"{BOT_NAMES[role_id]} [{bot.get('stance', '?')}] conclusion: {bot.get('conclusion', '')}"
         )
-
-    try:
-        content = _call_chat(
-            client, model_map["CHR-04"], CHAIR_SYSTEM,
-            build_chair_prompt(rulebook, case_text, prior, "\n\n".join(summaries)),
-            max_tokens=2600,
-        )
-        top = _extract_json(content)
-    except Exception as exc:  # noqa: BLE001
-        raise RuntimeError(f"CHR-04 synthesis failed on {model_map['CHR-04']}: {exc}") from exc
-
-    return {
-        "bots": bots,
-        "chair": top.get("chair", {}),
-        "verdict": top.get("verdict", {}),
-    }
+    chair, verdict, model = _run_chair(client, rulebook, case_text, prior_context, summaries)
+    used["chair"] = model
+    return {"bots": bots, "chair": chair, "verdict": verdict}, used
 
 
 # ---------------------------------------------------------------------------
-# Rendering helpers
+# Chibi Astro-Bot renderer (pure SVG primitives only — no freehand paths)
 # ---------------------------------------------------------------------------
+
+def render_chibi_bot_svg(role_id: str, name: str, accent_color: str, state: str, speech_text: str = "") -> str:
+    """
+    role_id: 'prosecutor' (Crimson #ef4444), 'defense' (Teal #14b8a6),
+             'ethics' (Amber #f59e0b), 'chair' (Gold #eab308)
+    state: 'idle' | 'scanning' | 'speaking' | 'objecting' | 'verdict'
+    """
+    # Role-specific LED eye expressions inside the visor
+    eyes_svg = {
+        "prosecutor": f'<rect class="led-eye" x="54" y="58" width="18" height="8" rx="4" fill="{accent_color}" transform="rotate(12 63 62)"/><rect class="led-eye" x="88" y="58" width="18" height="8" rx="4" fill="{accent_color}" transform="rotate(-12 97 62)"/>',
+        "defense": f'<ellipse class="led-eye" cx="63" cy="62" rx="9" ry="10" fill="{accent_color}"/><ellipse class="led-eye" cx="97" cy="62" rx="9" ry="10" fill="{accent_color}"/><circle cx="66" cy="59" r="3" fill="#ffffff"/><circle cx="100" cy="59" r="3" fill="#ffffff"/>',
+        "ethics": f'<circle class="led-eye" cx="63" cy="62" r="8" stroke="{accent_color}" stroke-width="3" fill="none"/><circle class="led-eye" cx="97" cy="62" r="8" stroke="{accent_color}" stroke-width="3" fill="none"/><circle cx="63" cy="62" r="3" fill="{accent_color}"/><circle cx="97" cy="62" r="3" fill="{accent_color}"/>',
+        "chair": f'<rect class="led-eye" x="54" y="56" width="18" height="11" rx="5" fill="{accent_color}"/><rect class="led-eye" x="88" y="56" width="18" height="11" rx="5" fill="{accent_color}"/><g class="chair-gavel"><rect x="128" y="88" width="6" height="32" rx="3" fill="#d97706"/><rect x="118" y="82" width="26" height="12" rx="4" fill="{accent_color}"/></g>'
+    }.get(role_id, "")
+
+    speech_html = f'<div class="speech-cloud" style="border-color:{accent_color};">{speech_text}</div>' if speech_text else ''
+
+    return f'''
+    <div class="bot-unit bot-{role_id} state-{state}" style="--accent: {accent_color};">
+      {speech_html}
+      <svg class="chibi-svg" viewBox="0 0 160 185" width="145" height="165" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <radialGradient id="shell-{role_id}" cx="35%" cy="25%" r="70%">
+            <stop offset="0%" stop-color="#ffffff"/>
+            <stop offset="65%" stop-color="#e2e8f0"/>
+            <stop offset="100%" stop-color="#94a3b8"/>
+          </radialGradient>
+          <filter id="glow-{role_id}" x="-20%" y="-20%" width="140%" height="140%">
+            <feDropShadow dx="0" dy="4" stdDeviation="4" flood-color="{accent_color}" flood-opacity="0.45"/>
+          </filter>
+        </defs>
+        <!-- Ground Shadow -->
+        <ellipse class="bot-shadow" cx="80" cy="172" rx="34" ry="7" fill="rgba(0,0,0,0.28)"/>
+        <!-- Antenna -->
+        <g class="bot-head-group">
+          <line x1="80" y1="26" x2="80" y2="12" stroke="#cbd5e1" stroke-width="4" stroke-linecap="round"/>
+          <circle class="antenna-tip" cx="80" cy="10" r="6" fill="{accent_color}" filter="url(#glow-{role_id})"/>
+          <!-- Glossy Chibi Head -->
+          <rect x="34" y="24" width="92" height="68" rx="32" fill="url(#shell-{role_id})" stroke="#cbd5e1" stroke-width="2"/>
+          <!-- Side Ear Pods -->
+          <rect x="24" y="46" width="10" height="24" rx="5" fill="{accent_color}"/>
+          <rect x="126" y="46" width="10" height="24" rx="5" fill="{accent_color}"/>
+          <!-- Dark Glass Visor -->
+          <rect x="44" y="38" width="72" height="42" rx="18" fill="#0f172a" stroke="{accent_color}" stroke-width="1.5"/>
+          <!-- Visor Gloss Reflection -->
+          <ellipse cx="62" cy="45" rx="16" ry="4" fill="rgba(255,255,255,0.18)" transform="rotate(-8 62 45)"/>
+          <!-- Role LED Eyes -->
+          {eyes_svg}
+        </g>
+        <!-- Glossy Chibi Torso -->
+        <g class="bot-torso-group">
+          <rect x="52" y="98" width="56" height="52" rx="24" fill="url(#shell-{role_id})" stroke="#cbd5e1" stroke-width="2"/>
+          <!-- Core Emblem -->
+          <circle class="core-badge" cx="80" cy="122" r="10" fill="#0f172a" stroke="{accent_color}" stroke-width="2"/>
+          <circle cx="80" cy="122" r="5" fill="{accent_color}" filter="url(#glow-{role_id})"/>
+        </g>
+        <!-- Floating Sphere Hands (No Stick Limbs) -->
+        <circle class="hand-left" cx="30" cy="120" r="11" fill="url(#shell-{role_id})" stroke="{accent_color}" stroke-width="2"/>
+        <circle class="hand-right" cx="130" cy="120" r="11" fill="url(#shell-{role_id})" stroke="{accent_color}" stroke-width="2"/>
+      </svg>
+      <div class="bot-label">{name}</div>
+      <div class="bot-state-badge">{state.upper()}</div>
+    </div>
+    '''
+
+
+# ---------------------------------------------------------------------------
+# Stage rendering (cutscene + beams)
+# ---------------------------------------------------------------------------
+
+def _beam_line(x1, y1, x2, y2, color, cls, active):
+    active_cls = "beam-active" if active else "beam-idle"
+    return (
+        f'<line class="beam-line {cls} {active_cls}" x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" '
+        f'stroke="{color}" stroke-dasharray="8 6" vector-effect="non-scaling-stroke"/>'
+    )
+
+
+def _bot_slot(role_id, x, y, state, name, accent, speech_text, model_short):
+    bot_html = render_chibi_bot_svg(role_id, name, accent, state, speech_text=speech_text)
+    model_badge = f'<div class="bot-model">{_escape(model_short)}</div>'
+    bot_html = bot_html.replace(
+        f'<div class="bot-state-badge">{state.upper()}</div>',
+        f'<div class="bot-state-badge">{state.upper()}</div>{model_badge}',
+        1,
+    )
+    return f'<div class="bot-slot" style="left:{x}%; top:{y}%;">{bot_html}</div>'
+
 
 def _escape(s: str) -> str:
     return html.escape(str(s or ""))
 
 
-def _score_bar(score: float, accent: str) -> str:
-    pct = max(0.0, min(1.0, float(score or 0.0))) * 100
-    return (
-        f'<div class="scorebar"><div class="scorefill" '
-        f'style="width:{pct:.0f}%;background:{accent}"></div>'
-        f'<span style="color:{accent}">{pct:.0f}%</span></div>'
-    )
+def _status_html(msg, kind="info", accent=None):
+    dot = f'<span class="status-dot" style="background:{accent}"></span>' if accent else ""
+    return f'<div class="status-banner status-{kind}">{dot}{_escape(msg)}</div>'
 
 
-def _stance_badge(stance: str) -> str:
-    cls = {
-        "PROSECUTION": "st-pros",
-        "DEFENSE": "st-def",
-        "FAIRNESS": "st-fair",
-        "SYNTHESIS": "st-syn",
-    }.get(stance, "st-fair")
-    return f'<span class="stance {cls}">{_escape(stance)}</span>'
+def render_stage(bots, chair, theme, orientation, active_role_id=None,
+                 used_models=None, verdict_locked=False) -> str:
+    """Render the floating-limb chibi council stage + beam overlay."""
+    bots = list(bots or [])
+    chair = chair or {}
+    used = used_models or {}
+    by_role = {b.get("role_id"): b for b in bots}
+    pos = STAGE_POSITIONS.get(orientation, STAGE_POSITIONS[ORIENTATIONS[0]])
+    theme_key = THEME_KEYS.get(theme, "cyber")
+    orientation_key = ORIENTATION_KEYS.get(orientation, "semicircle")
 
-
-# ---------------------------------------------------------------------------
-# Stage rendering (the gamified Astro-Bot council)
-# ---------------------------------------------------------------------------
-
-def _bot_svg(role: str, is_chair: bool = False, kine: str = "scanning", model_label: str = "") -> str:
-    accent = BOT_ACCENTS[role]
-    extra_ant = ""
-    if is_chair:
-        extra_ant = '<circle cx="70" cy="16" r="6" fill="%s" class="chair-orb" />' % accent
-    badge = (
-        f'<text x="70" y="164" text-anchor="middle" class="model-badge" fill="{accent}">{_escape(model_label)}</text>'
-        if model_label
-        else ""
-    )
-    return f"""
-  <g class="bot {role.lower().replace('-', '')}" data-kine="{kine}" style="--accent:{accent}">
-    <ellipse cx="70" cy="100" rx="48" ry="58" fill="{accent}" class="kine-aura"/>
-    <circle cx="70" cy="116" r="40" fill="rgba(0,0,0,0.18)" class="bot-shadow"/>
-    <g class="bot-body">
-      <line x1="70" y1="34" x2="70" y2="52" stroke="{accent}" stroke-width="3" class="antenna-stem"/>
-      <circle cx="70" cy="30" r="7" fill="none" stroke="{accent}" stroke-width="2.5" class="antenna-tip"/>
-      {extra_ant}
-      <ellipse cx="70" cy="78" rx="34" ry="30" fill="url(#bodygrad)" stroke="{accent}" stroke-width="2.5"/>
-      <path d="M 70 52 Q 70 42 70 48" stroke="#ffffff" stroke-width="9" fill="none" opacity="0.7" stroke-linecap="round"/>
-      <rect x="52" y="66" width="36" height="24" rx="12" fill="#0b1020" stroke="{accent}" stroke-width="2" class="visor"/>
-      <circle cx="63" cy="78" r="4" fill="{accent}" class="eye eye-l"/>
-      <circle cx="77" cy="78" r="4" fill="{accent}" class="eye eye-r"/>
-      <rect x="64" y="108" width="36" height="30" rx="9" fill="url(#bodygrad)" stroke="{accent}" stroke-width="2.5"/>
-      <circle cx="70" cy="121" r="4.5" fill="{accent}"/>
-      <circle cx="70" cy="131" r="3" fill="{accent}" opacity="0.7"/>
-      <path d="M 34 104 L 26 118 L 34 122" fill="none" stroke="{accent}" stroke-width="5" stroke-linecap="round" class="arm-l"/>
-      <path d="M 106 104 L 114 118 L 106 122" fill="none" stroke="{accent}" stroke-width="5" stroke-linecap="round" class="arm-r"/>
-      <rect x="52" y="140" width="16" height="14" rx="4" fill="url(#bodygrad)" stroke="{accent}" stroke-width="2" class="leg-l"/>
-      <rect x="72" y="140" width="16" height="14" rx="4" fill="url(#bodygrad)" stroke="{accent}" stroke-width="2" class="leg-r"/>
-    </g>
-    {badge}
-  </g>"""
-
-
-def _speech_cloud(role: str, speech: str, cited: list, focused: bool = False) -> str:
-    accent = BOT_ACCENTS[role]
-    clauses = "".join(
-        f'<div class="cited-chip">“{_escape(c)}”</div>' for c in (cited or [])
-    )
-    focused_cls = " cloud-focused" if focused else ""
-    return f"""
-  <foreignObject class="cloud-wrap" x="0" y="0" width="232" height="120">
-    <div class="speech-cloud{focused_cls}" style="--cloud-accent:{accent}">
-      <div class="cloud-role" style="color:{accent}">{_escape(role)} - {_escape(BOT_TITLES[role])}</div>
-      <div class="cloud-text">{_escape(speech)}</div>
-      {clauses}
-    </div>
-  </foreignObject>"""
-
-
-def _beam(x1, y1, x2, y2, stroke, width, dasharray, cls, active, opacity, marker=False):
-    state = "beam-active" if active else "beam-idle"
-    dash = f' stroke-dasharray="{dasharray}"' if dasharray else ""
-    marker_attr = ' marker-end="url(#arrow)"' if marker else ""
-    return (
-        f'<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" stroke="{stroke}" '
-        f'stroke-width="{width}"{dash} class="beam {cls} {state}" opacity="{opacity}"{marker_attr}/>'
-    )
-
-
-def _kine_state(role, focused_role, locked, objection_target):
-    """Map a bot to its kinesic animation state for a given inspector focus."""
-    if role == "CHR-04":
-        if focused_role == "CHR-04" or (focused_role is None and locked):
-            return "verdict_locked"
-        return "speaking"
-    if focused_role:
-        if role == focused_role:
-            return "speaking"
-        if objection_target == focused_role:
-            return "objecting"
+    def resolve_kine(role_id):
+        if role_id == "chair":
+            if verdict_locked and chair:
+                return "verdict"
+            if role_id == active_role_id:
+                return "speaking"
+            return "idle" if chair else "scanning"
+        bot = by_role.get(role_id)
+        if role_id == active_role_id:
+            return "objecting" if (bot and bot.get("objection_target")) else "speaking"
+        if bot:
+            return "idle"
         return "scanning"
-    if objection_target:
-        return "objecting"
-    return "speaking"
 
+    slots = []
+    for role_id in ORDER:
+        bot = by_role.get(role_id)
+        name = BOT_NAMES[role_id]
+        accent = BOT_ACCENTS[role_id]
+        kine = resolve_kine(role_id)
 
-def render_stage(bots: list, chair: dict, theme: str, orientation: str,
-                 focus: str = STAGE_FOCUS_CHOICES[0], models: dict = None,
-                 locked: bool = False) -> str:
-    """Build the animated council stage as one SVG/CSS fragment."""
-    if not bots:
-        bots = []
-    models = models or {}
-    focused_role = FOCUS_ROLE.get(focus)
+        speech = ""
+        clause = ""
+        if role_id == "chair":
+            speech = chair.get("speech", "") or ""
+        elif bot:
+            speech = bot.get("speech", "") or ""
+            clause = bot.get("clause_ref") or ""
+            if not clause and bot.get("cited_clauses"):
+                clause = bot.get("cited_clauses")[0]
 
-    # Position mapping per orientation (x, y) for each role on a 540x400 canvas.
-    spots = {
-        "Semicircle Tribunal": {
-            "LEX-01": (26, 210), "CTX-02": (168, 132), "ETH-03": (296, 132), "CHR-04": (414, 210),
-        },
-        "Adversarial Arena": {
-            "LEX-01": (30, 90), "CTX-02": (340, 90), "ETH-03": (340, 230), "CHR-04": (175, 155),
-        },
-        "Roundtable Council": {
-            "LEX-01": (40, 150), "CTX-02": (200, 70), "ETH-03": (350, 150), "CHR-04": (200, 220),
-        },
-    }[orientation]
+        speech_text = ""
+        if speech:
+            tag = f'<span class="clause-tag">[{_escape(clause)}]</span>' if clause else ""
+            speech_text = f'<span class="cloud-speech">{_escape(speech)}</span>{tag}'
 
-    bot_nodes = []
-    for b in bots:
-        role = b.get("role", "LEX-01")
-        x, y = spots.get(role, (60, 150))
-        kine = _kine_state(role, focused_role, locked, b.get("objection_target"))
-        label = MODEL_SHORT.get(models.get(role, ""), "")
-        bot_nodes.append(
-            f'<g transform="translate({x},{y})">{_bot_svg(role, is_chair=(role == "CHR-04"), kine=kine, model_label=label)}</g>'
-        )
+        model = used.get(role_id) or ROLE_MODELS[role_id]
+        model_short = MODEL_SHORT.get(model, model.split("/")[-1])
+        x, y = pos[role_id]
+        slots.append(_bot_slot(role_id, x, y, kine, name, accent, speech_text, model_short))
 
-    # Speech clouds positioned above each bot.
-    cloud_nodes = []
-    for b in bots:
-        role = b.get("role", "LEX-01")
-        x, y = spots.get(role, (60, 150))
-        cx = x - 26
-        cy = max(6, y - 118)
-        cloud_nodes.append(
-            f'<g transform="translate({cx},{cy})">'
-            f'{_speech_cloud(role, b.get("speech", ""), b.get("cited_clauses", []), focused=(focused_role == role))}'
-            f'</g>'
-        )
-
-    # Workflow beams: chair collects from the three analysts + objection arrows.
     beams = []
-    chair_spot = spots.get("CHR-04", spots.get("LEX-01"))
-    if chair and chair_spot:
-        chx, chy = chair_spot
-        chx += 50
-        for b in bots:
-            role = b.get("role")
-            if role == "CHR-04":
-                continue
-            sx, sy = spots.get(role, (0, 0))
-            sx += 50
-            sy += 40
-            target = b.get("objection_target")
-            cls = "beam-agree" if b.get("agreement_target") else "beam-flow"
-            col = BOT_ACCENTS.get(role, "#888") if target else "#6d7ba8"
-            active = (focused_role is None) or (focused_role == role) or (focused_role == "CHR-04")
-            beams.append(_beam(sx, sy, chx, chy + 40, col, "1.5", "3 5", cls, active, "0.55"))
-            if target and target in spots:
-                tx, ty = spots[target]
-                tx += 50
-                ty += 20
-                active = (focused_role is None) or (focused_role == role) or (focused_role == target)
-                beams.append(
-                    _beam(sx, sy, tx, ty, BOT_ACCENTS[role], "2.5", None,
-                          "beam-objection", active, "0.85", marker=True)
-                )
-
-    body_gradient = (
-        '<defs>'
-        '<linearGradient id="bodygrad" x1="0" y1="0" x2="0" y2="1">'
-        '<stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#dfe6f6"/>'
-        '</linearGradient></defs>'
-    )
+    for role_id in ["prosecutor", "defense", "ethics"]:
+        b = by_role.get(role_id)
+        if not b:
+            continue
+        ax, ay = pos[role_id]
+        active = (role_id == active_role_id)
+        cx, cy = pos["chair"]
+        beams.append(_beam_line(ax, ay, cx, cy, BOT_ACCENTS["chair"], "beam-synthesis", active))
+        target = b.get("objection_target") or b.get("agreement_target")
+        if target and target in NAME_TO_ROLE:
+            tx, ty = pos[NAME_TO_ROLE[target]]
+            cls = "beam-objection" if b.get("objection_target") else "beam-agreement"
+            beams.append(_beam_line(ax, ay, tx, ty, BOT_ACCENTS[role_id], cls, active))
 
     question_list = ""
     if chair and chair.get("clarifying_questions"):
@@ -717,24 +646,16 @@ def render_stage(bots: list, chair: dict, theme: str, orientation: str,
         )
 
     return f"""
-<div class="stage-shell stage-{theme.lower().replace(' ', '-')} orient-{orientation.lower().replace(' ', '-')}">
+<div class="council-stage stage-{theme_key} orient-{orientation_key}">
   <div class="stage-head">
     <span class="stage-title">⚖️ AEGISBOARD COUNCIL STAGE</span>
     <span class="stage-meta">Theme: {_escape(theme)} &nbsp;•&nbsp; {_escape(orientation)}</span>
   </div>
-  <div class="stage-view">
-    <svg viewBox="0 0 540 400" xmlns="http://www.w3.org/2000/svg" class="stage-svg">
-      {body_gradient}
-      <defs>
-        <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3"
-                orient="auto" markerUnits="strokeWidth">
-          <path d="M0,0 L6,3 L0,6 z" fill="#ff3b5c"/>
-        </marker>
-      </defs>
+  <div class="stage-area">
+    <svg class="beam-overlay" viewBox="0 0 100 100" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
       {''.join(beams)}
-      {''.join(bot_nodes)}
-      {''.join(cloud_nodes)}
     </svg>
+    {''.join(slots)}
   </div>
   {question_list}
 </div>
@@ -749,7 +670,6 @@ def highlight_rulebook(rulebook: str, bots: list) -> str:
     """Render rulebook HTML, glowing any clause quoted by the bots."""
     if not rulebook:
         return '<div class="empty-note">No rulebook loaded.</div>'
-    # Escape base text, then wrap cited excerpts in a highlight span.
     esc = _escape(rulebook)
     for b in bots or []:
         for c in b.get("cited_clauses", []) or []:
@@ -790,19 +710,15 @@ def render_verdict(verdict: dict) -> str:
     parts = (remediation or "").split(" || ") if isinstance(remediation, str) else [str(remediation)]
     rem_html = "".join(f"<li>{_escape(p.strip())}</li>" for p in parts if p.strip())
 
-    row = lambda role, accent: (  # noqa: E731
-        f'<div class="matrix-row" style="--m-accent:{accent}">'
-        f'<div class="matrix-role" style="color:{accent}">{_escape(role)}</div>'
-        f'<div class="matrix-concl">{_escape(matrix.get(role, ""))}</div></div>'
-    )
+    def row(role_name):
+        accent = ACCENTS_BY_NAME.get(role_name, "#94a3b8")
+        return (
+            f'<div class="matrix-row" style="--m-accent:{accent}">'
+            f'<div class="matrix-role" style="color:{accent}">{_escape(role_name)}</div>'
+            f'<div class="matrix-concl">{_escape(matrix.get(role_name, ""))}</div></div>'
+        )
 
-    matrix_html = "".join(
-        [
-            row("LEX-01", BOT_ACCENTS["LEX-01"]),
-            row("CTX-02", BOT_ACCENTS["CTX-02"]),
-            row("ETH-03", BOT_ACCENTS["ETH-03"]),
-        ]
-    )
+    matrix_html = "".join(row(n) for n in ["LEX-01", "CTX-02", "ETH-03"])
 
     return f"""
 <div class="dossier">
@@ -854,10 +770,7 @@ def handle_file(file):
     if file is None:
         return ""
     try:
-        if hasattr(file, "name"):
-            path = file.name
-        else:
-            path = str(file)
+        path = file.name if hasattr(file, "name") else str(file)
     except Exception:
         path = str(file)
 
@@ -902,209 +815,196 @@ def _default_state():
     return {
         "rulebook": "",
         "case": "",
-        "model": DEFAULT_MODEL,
         "api_key": "",
         "deliberation": None,
+        "model_used": {},
         "followups": [],
         "theme": THEMES[0],
         "orientation": ORIENTATIONS[0],
-        "focus": STAGE_FOCUS_CHOICES[0],
-        "multi_model": False,
-        "model_map": {},
     }
 
 
-def _run_locked(state: dict, rulebook: str, case_text: str, model: str, api_key: str,
-                multi_model: bool, model_map: dict):
-    prior = "\n\n".join(state.get("followups", []))
-    if multi_model and model_map:
-        data = run_tribunal_distributed(rulebook, case_text, model_map, api_key, prior)
-    else:
-        data = run_tribunal(rulebook, case_text, model, api_key, prior)
-    state["rulebook"] = rulebook
-    state["case"] = case_text
-    state["model"] = model
-    state["api_key"] = api_key
-    state["multi_model"] = bool(multi_model)
-    state["model_map"] = dict(model_map or {})
-    state["deliberation"] = data
-    return data
+def _consult_md(chair):
+    qs = chair.get("clarifying_questions", []) or []
+    qs = qs if isinstance(qs, list) else [qs]
+    if qs:
+        return "### 🎤 CHAIR BOARD CONSULTS YOU\n\n" + "\n\n".join(
+            f"**Q{i+1}.** {q}" for i, q in enumerate(qs)
+        )
+    return "### 🎤 Consultation\n\nThe Chair has no additional questions."
 
 
-def _render_stage_from_state(state, focus=None):
-    d = state.get("deliberation") or {}
-    theme = state.get("theme", THEMES[0])
-    orientation = state.get("orientation", ORIENTATIONS[0])
-    focus = focus if focus is not None else state.get("focus", STAGE_FOCUS_CHOICES[0])
-    verdict = d.get("verdict") or {}
-    return render_stage(
-        d.get("bots", []),
-        d.get("chair", {}),
-        theme,
-        orientation,
-        focus=focus,
-        models=state.get("model_map") or {},
-        locked=bool(verdict),
-    )
+# --- Cutscene deliberation generator ---------------------------------------
 
-
-def convene_board(rulebook, case_text, model, api_key, theme, orientation,
-                  multi_model, lex_model, ctx_model, eth_model, chr_model, state):
+def convene_board(rulebook, case_text, api_key, theme, orientation, state):
     state = dict(state or _default_state())
     state["theme"] = theme
     state["orientation"] = orientation
-    model_map = {
-        "LEX-01": lex_model, "CTX-02": ctx_model,
-        "ETH-03": eth_model, "CHR-04": chr_model,
-    }
-    effective_map = dict(model_map) if multi_model else {r: model for r in BOT_ROLES}
+    state["followups"] = []
+
     warn = _validate(rulebook, case_text)
     if warn:
-        return (
-            warn,
-            render_stage([], {}, theme, orientation, models=effective_map),
-            highlight_rulebook(rulebook or "", []),
-            "",
-            gr.update(value=""),
-            "",
-            state,
-        )
+        yield (warn, render_stage([], {}, theme, orientation),
+               highlight_rulebook(rulebook or "", []), "", gr.update(value=""), "", state)
+        return
 
     if not resolve_api_key(api_key).strip():
-        return (
+        yield (
             '<div class="warning-banner">⚠️ <b>No API key configured.</b> Set '
-            '<code>MODELSCOPE_API_KEY</code> or enter a key in the top bar.</div>',
-            render_stage([], {}, theme, orientation, models=model_map),
-            highlight_rulebook(rulebook or "", []),
-            "",
-            gr.update(value=""),
-            "",
-            state,
+            '<code>MODELSCOPE_API_KEY</code> or <code>MODELSCOPE_SDK_TOKEN</code> '
+            'or enter a key in the settings bar.</div>',
+            render_stage([], {}, theme, orientation),
+            highlight_rulebook(rulebook or "", []), "", gr.update(value=""), "", state,
         )
+        return
 
+    yield (
+        _status_html("⚖️ Convening the four-persona council…", "info"),
+        render_stage([], {}, theme, orientation, active_role_id="prosecutor"),
+        highlight_rulebook(rulebook or "", []), "", gr.update(value=""), "", state,
+    )
+
+    client = build_client(resolve_api_key(api_key))
+    bots = []
+    used = {}
+    summaries = []
     try:
-        data = _run_locked(state, rulebook, case_text, model, api_key, multi_model, model_map)
-    except Exception as exc:  # noqa: BLE001
-        return (
-            f'<div class="warning-banner">🚨 <b>Tribunal error:</b> {_escape(str(exc))}</div>',
-            render_stage([], {}, theme, orientation, models=model_map),
-            highlight_rulebook(rulebook or "", []),
-            "",
-            gr.update(value=""),
-            "",
-            state,
+        for role_id in ["prosecutor", "defense", "ethics"]:
+            bot, model = _run_bot(client, role_id, rulebook, case_text, "", summaries)
+            bots.append(bot)
+            used[role_id] = model
+            summaries.append(
+                f"{BOT_NAMES[role_id]} [{bot.get('stance', '?')}] conclusion: {bot.get('conclusion', '')}"
+            )
+            name = BOT_NAMES[role_id]
+            yield (
+                _status_html(f"{name} · {BOT_TITLES[role_id]} is presenting its argument…",
+                             "speaking", BOT_ACCENTS[role_id]),
+                render_stage(bots, {}, theme, orientation, active_role_id=role_id, used_models=used),
+                highlight_rulebook(rulebook or "", bots), "", gr.update(value=""),
+                '<div class="empty-note">Deliberation in progress…</div>', state,
+            )
+
+        yield (
+            _status_html("CHR-04 · Board Chair is synthesizing the conclusive verdict…",
+                         "speaking", BOT_ACCENTS["chair"]),
+            render_stage(bots, {}, theme, orientation, active_role_id="chair", used_models=used),
+            highlight_rulebook(rulebook or "", bots), "", gr.update(value=""),
+            '<div class="empty-note">Synthesis in progress…</div>', state,
         )
 
-    bots = data.get("bots", [])
-    chair = data.get("chair", {})
-    verdict = data.get("verdict", {})
-    state["focus"] = STAGE_FOCUS_CHOICES[0]
-    stage_html = _render_stage_from_state(state)
-    policy_html = highlight_rulebook(rulebook, bots)
-    qs = chair.get("clarifying_questions", [])
-    qs = qs if isinstance(qs, list) else [qs]
-    consult = "### 🎤 CHAIR BOARD CONSULTS YOU\n\n" + "\n\n".join(
-        f"**Q{i+1}.** {q}" for i, q in enumerate(qs)
-    ) if qs else "### 🎤 Consultation\n\nThe Chair has no additional questions."
-    verdict_html = render_verdict(verdict)
-    return warn, stage_html, policy_html, consult, gr.update(value=""), verdict_html, state
+        chair, verdict, model = _run_chair(client, rulebook, case_text, "", summaries)
+        used["chair"] = model
+    except Exception as exc:  # noqa: BLE001
+        yield (
+            f'<div class="warning-banner">🚨 <b>Tribunal error:</b> {_escape(str(exc))}</div>',
+            render_stage([], {}, theme, orientation),
+            highlight_rulebook(rulebook or "", []), "", gr.update(value=""), "", state,
+        )
+        return
+
+    state["rulebook"] = rulebook
+    state["case"] = case_text
+    state["api_key"] = api_key
+    state["deliberation"] = {"bots": bots, "chair": chair, "verdict": verdict}
+    state["model_used"] = used
+
+    yield (
+        _status_html("🔒 Conclusive Verdict locked by CHR-04.", "ok", BOT_ACCENTS["chair"]),
+        render_stage(bots, chair, theme, orientation, active_role_id="chair",
+                     used_models=used, verdict_locked=True),
+        highlight_rulebook(rulebook, bots),
+        _consult_md(chair),
+        gr.update(value=""),
+        render_verdict(verdict),
+        state,
+    )
 
 
 def submit_followup(followup, state):
     state = dict(state or _default_state())
     rb = state.get("rulebook", "")
     case = state.get("case", "")
-    model = state.get("model", DEFAULT_MODEL)
     api_key = state.get("api_key", "")
-    multi_model = state.get("multi_model", False)
-    model_map = state.get("model_map", {})
-    stage_html = _render_stage_from_state(state)
-    policy_html = highlight_rulebook(rb, [])
+    theme = state.get("theme", THEMES[0])
+    orientation = state.get("orientation", ORIENTATIONS[0])
+    verdict_now = render_verdict(state.get("deliberation", {}).get("verdict", {}))
 
     if not followup or len(followup.strip()) < 3:
         return (
             gr.update(value='<div class="warning-banner">⚠️ Follow-up is too short.</div>'),
-            followup,
-            state,
-            "",
-            stage_html,
-            policy_html,
-            render_verdict(state.get("deliberation", {}).get("verdict", {})),
+            followup, state, "",
+            _render_stage_from_state(state), highlight_rulebook(rb, []), verdict_now,
+        )
+
+    if not resolve_api_key(api_key).strip():
+        return (
+            gr.update(value='<div class="warning-banner">⚠️ No API key configured.</div>'),
+            followup, state, "",
+            _render_stage_from_state(state), highlight_rulebook(rb, []), verdict_now,
         )
 
     if not rb or not case:
         return (
             gr.update(value='<div class="warning-banner">⚠️ Run the initial tribunal first.</div>'),
-            followup,
-            state,
-            "",
-            stage_html,
-            policy_html,
-            render_verdict({}),
+            followup, state, "",
+            _render_stage_from_state(state), highlight_rulebook(rb, []), render_verdict({}),
         )
 
     state.setdefault("followups", []).append("HUMAN FOLLOW-UP: " + followup.strip())
+    prior = "\n\n".join(state.get("followups", []))
 
     try:
-        data = _run_locked(state, rb, case, model, api_key, multi_model, model_map)
+        data, used = _deliberate_full(rb, case, api_key, prior)
     except Exception as exc:  # noqa: BLE001
         return (
             gr.update(value=f'<div class="warning-banner">🚨 {_escape(str(exc))}</div>'),
-            followup,
-            state,
-            "",
-            _render_stage_from_state(state),
-            highlight_rulebook(rb, []),
-            render_verdict({}),
+            followup, state, "",
+            _render_stage_from_state(state), highlight_rulebook(rb, []), render_verdict({}),
         )
 
+    state["deliberation"] = data
+    state["model_used"] = used
     bots = data.get("bots", [])
     chair = data.get("chair", {})
     verdict = data.get("verdict", {})
-    stage_html = _render_stage_from_state(state)
-    policy_html = highlight_rulebook(rb, bots)
-    qs = chair.get("clarifying_questions", [])
-    qs = qs if isinstance(qs, list) else [qs]
-    consult = ("### 🎤 CHAIR BOARD CONSULTS YOU\n\n"
-               + "\n\n".join(f"**Q{i+1}.** {q}" for i, q in enumerate(qs))) if qs else ""
     return (
-        gr.update(value=consult),
-        "",
-        state,
+        gr.update(value=_consult_md(chair)),
+        "", state,
         "✅ Board acknowledged your follow-up and re-deliberated.",
-        stage_html,
-        policy_html,
+        render_stage(bots, chair, theme, orientation, used_models=used, verdict_locked=True),
+        highlight_rulebook(rb, bots),
         render_verdict(verdict),
     )
 
 
-def focus_stage(focus, state):
-    state = dict(state or _default_state())
-    state["focus"] = focus
-    return _render_stage_from_state(state), state
+def _render_stage_from_state(state):
+    d = state.get("deliberation") or {}
+    theme = state.get("theme", THEMES[0])
+    orientation = state.get("orientation", ORIENTATIONS[0])
+    return render_stage(
+        d.get("bots", []), d.get("chair", {}), theme, orientation,
+        used_models=state.get("model_used") or {}, verdict_locked=bool(d.get("verdict")),
+    )
 
 
-def _theme_and_orientation_store(theme, orientation, state):
+def theme_orient_store(theme, orientation, state):
     state = dict(state or _default_state())
     state["theme"] = theme
     state["orientation"] = orientation
     return _render_stage_from_state(state), state
 
 
-# ---------------------------------------------------------------------------
-# Exportable dossier
-# ---------------------------------------------------------------------------
+# --- Exportable dossier -----------------------------------------------------
 
 def build_dossier_markdown(state) -> str:
     d = state.get("deliberation") or {}
-    rulebook = (state.get("rulebook") or "").strip()
     case = (state.get("case") or "").strip()
     bots = d.get("bots", [])
     chair = d.get("chair", {})
     verdict = d.get("verdict", {}) or {}
     followups = state.get("followups", [])
-    model_map = state.get("model_map", {}) or {}
-    primary = state.get("model", DEFAULT_MODEL)
+    used = state.get("model_used", {}) or {}
 
     L = ["# AEGISBOARD — Official Advisory Dossier", ""]
     L.append("> Auto-generated by the AegisBoard Multi-Agent Policy & Rulebook Advisory Tribunal.")
@@ -1118,12 +1018,15 @@ def build_dossier_markdown(state) -> str:
     L.append("## 2. Council Arguments & Cited Clauses")
     L.append("")
     for b in bots:
-        role = b.get("role", "?")
-        L.append(f"### {role} — {BOT_TITLES.get(role, '')}")
+        role_id = b.get("role_id", "?")
+        name = b.get("role", "?")
+        L.append(f"### {name} — {BOT_TITLES.get(role_id, '')}")
         L.append("")
-        L.append(f"- **Model:** `{model_map.get(role, primary)}`")
+        L.append(f"- **Model:** `{used.get(role_id, '—')}`")
         L.append(f"- **Stance:** {b.get('stance', '—')} (score {float(b.get('stance_score', 0.5)) * 100:.0f}%)")
         L.append(f"- **Argument:** {b.get('speech', '—')}")
+        if b.get("clause_ref"):
+            L.append(f"- **Decisive clause:** [{b.get('clause_ref')}]")
         L.append(f"- **Conclusion:** {b.get('conclusion', '—')}")
         if b.get("objection_target"):
             L.append(f"- **Objects to:** {b.get('objection_target')}")
@@ -1143,10 +1046,8 @@ def build_dossier_markdown(state) -> str:
     if qs:
         for i, q in enumerate(qs, 1):
             L.append(f"**Q{i}.** {q}")
-            ans = followups[i - 1] if i - 1 < len(followups) else None
-            if ans:
-                cleaned = ans.replace("HUMAN FOLLOW-UP: ", "", 1)
-                L.append(f"- **Reply:** {cleaned}")
+            if i - 1 < len(followups):
+                L.append(f"- **Reply:** {followups[i - 1].replace('HUMAN FOLLOW-UP: ', '', 1)}")
             L.append("")
     else:
         L.append("The Chair raised no additional questions.")
@@ -1200,28 +1101,49 @@ def download_dossier(state):
 
 CSS = r"""
 :root {
-  --panel-bg: rgba(16, 20, 38, 0.85);
-  --panel-border: rgba(120, 140, 220, 0.25);
-  --text: #eef1fb;
-  --muted: #9aa4c8;
+  --panel-bg: rgba(16, 20, 38, 0.88);
+  --panel-border: rgba(148, 163, 184, 0.22);
+  --text: #f1f5f9;
+  --muted: #94a3b8;
 }
-body { background: transparent; }
 
+/* ===== Permanent dark theme & cyber glassmorphism ===== */
+body { background: #070c1a !important; }
 .gradio-container {
   max-width: 1560px !important;
   margin: 0 auto;
   background:
     radial-gradient(1200px 600px at 20% -10%, rgba(59, 91, 219, 0.22), transparent 60%),
-    radial-gradient(900px 500px at 90% 0%, rgba(57, 255, 160, 0.10), transparent 55%),
-    radial-gradient(1000px 700px at 50% 120%, rgba(255, 59, 92, 0.10), transparent 60%),
-    #0b0e1c;
+    radial-gradient(900px 500px at 90% 0%, rgba(20, 184, 166, 0.10), transparent 55%),
+    radial-gradient(1000px 700px at 50% 120%, rgba(239, 68, 68, 0.10), transparent 60%),
+    #070c1a;
   color: var(--text);
   font-family: 'Segoe UI', 'Inter', sans-serif;
 }
 
+.gradio-container .block, .gradio-container .form, .gradio-container .accordion {
+  background: rgba(16, 20, 38, 0.88) !important;
+  border: 1px solid var(--panel-border) !important;
+  color: var(--text) !important;
+}
+.gradio-container input, .gradio-container textarea, .gradio-container select {
+  background: #0f172a !important;
+  color: #f1f5f9 !important;
+  border: 1px solid rgba(148, 163, 184, 0.22) !important;
+}
+.gradio-container .wrap {
+  background: rgba(15, 23, 42, 0.6) !important;
+  border: none !important;
+}
+.gradio-container label, .gradio-container .form label, .gradio-container .block label {
+  color: #e2e8f0 !important;
+}
+.gradio-container .prose { color: #e2e8f0; }
+.gradio-container button.selected, .gradio-container .primary { color: #0b1020; }
+
 h1.app-title {
   font-size: 30px !important; font-weight: 800; letter-spacing: .5px;
-  background: linear-gradient(90deg, #ffd23f, #2ad8ff, #39ffa0);
+  background: linear-gradient(90deg, #eab308, #14b8a6, #f59e0b);
   -webkit-background-clip: text; background-clip: text; color: transparent;
   margin: 0;
 }
@@ -1241,98 +1163,150 @@ h1.app-title {
 }
 
 .warning-banner {
-  background: linear-gradient(90deg, rgba(255,59,92,.18), rgba(255,59,92,.05));
-  border: 1px solid rgba(255,59,92,.5); color: #ffb7c4;
+  background: linear-gradient(90deg, rgba(239,68,68,.18), rgba(239,68,68,.05));
+  border: 1px solid rgba(239,68,68,.5); color: #fecaca;
   border-radius: 10px; padding: 10px 12px; font-size: 13px; line-height: 1.5;
 }
-
-/* ---- Stage ---- */
-.stage-shell {
-  border-radius: 16px; padding: 8px; border: 1px solid var(--panel-border);
-  transition: background .4s;
+.status-banner {
+  display: flex; align-items: center; gap: 8px;
+  background: rgba(16,20,38,.85); border: 1px solid var(--panel-border);
+  color: #e2e8f0; border-radius: 10px; padding: 8px 12px; font-size: 13px;
 }
-.stage-cyber-tribunal { background: radial-gradient(100% 100% at 50% 0%, #141a3d 0%, #0a0d1e 70%); }
-.stage-classic-high-court { background: radial-gradient(100% 100% at 50% 0%, #3a2a1a 0%, #20150c 75%); }
-.stage-zen-boardroom { background: radial-gradient(100% 100% at 50% 0%, #16312a 0%, #0c1a16 75%); }
+.status-ok { border-color: rgba(20,184,166,.5); color: #99f6e4; }
+.status-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; box-shadow: 0 0 8px currentColor; }
 
+/* ---- Stage shell + themes (CSS variables switched on .council-stage) ---- */
+.council-stage { border-radius: 18px; padding: 10px; border: 1px solid var(--panel-border); }
 .stage-head { display: flex; justify-content: space-between; align-items: center; padding: 4px 8px; }
 .stage-title { font-weight: 800; font-size: 13px; letter-spacing: 1px; color: #fff; }
 .stage-meta { font-size: 11px; color: var(--muted); }
-.stage-view { overflow: hidden; }
-.stage-svg { width: 100%; height: auto; display: block; }
+.stage-area { position: relative; min-height: 430px; overflow: hidden; border-radius: 12px; }
+
+.stage-classic { background: radial-gradient(120% 120% at 50% -10%, #4a2e1b 0%, #2a1a10 55%, #170e08 100%); }
+.stage-cyber { background: radial-gradient(120% 120% at 50% -20%, #12264a 0%, #0a1230 60%, #050a18 100%); }
+.stage-cyber .stage-area {
+  background-image: linear-gradient(rgba(42,216,255,.06) 1px, transparent 1px),
+                    linear-gradient(90deg, rgba(42,216,255,.06) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+.stage-zen { background: radial-gradient(120% 120% at 50% -10%, #10332a 0%, #0b2019 55%, #06110d 100%); }
 
 .chair-questions {
-  margin-top: 8px; background: rgba(255,210,63,.07);
-  border: 1px dashed rgba(255,210,63,.4); border-radius: 10px; padding: 8px 10px;
-  font-size: 12px;
+  margin-top: 8px; background: rgba(234,179,8,.07);
+  border: 1px dashed rgba(234,179,8,.4); border-radius: 10px; padding: 8px 10px; font-size: 12px;
 }
-.chair-q-title { color: #ffd23f; font-weight: 800; letter-spacing: 1px; font-size: 11px; }
+.chair-q-title { color: #eab308; font-weight: 800; letter-spacing: 1px; font-size: 11px; }
 .chair-q { color: #f3e6b0; margin-top: 4px; line-height: 1.45; }
 
-/* Bots */
-.bot { transform-box: fill-box; transform-origin: center; animation: bob 3.2s ease-in-out infinite; }
-.lex01 { animation-delay: 0s; }
-.ctx02 { animation-delay: .6s; }
-.eth03 { animation-delay: 1.2s; }
-.chr04 { animation-delay: 1.8s; }
-@keyframes bob { 0%,100% { transform: translateY(0) } 50% { transform: translateY(-6px) } }
-.visor { animation: scan 2.8s ease-in-out infinite; }
-@keyframes scan { 0%,100% { transform: translateX(0) } 25% { transform: translateX(2px) } 75% { transform: translateX(-2px) } }
-.antenna-tip { animation: ant 2.4s ease-in-out infinite; }
-@keyframes ant { 0%,100% { r: 7 } 50% { r: 9 } }
-.chair-orb { animation: orb 1.6s ease-in-out infinite; }
-@keyframes orb { 0%,100% { opacity: 1 } 50% { opacity: .3 } }
-.bot:hover .bot-body { animation: lean .5s ease-in-out alternate 2; }
-@keyframes lean { from { transform: rotate(0) } to { transform: rotate(-4deg) } }
+/* ---- Beam overlay ---- */
+.beam-overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.beam-line { fill: none; stroke-linecap: round; }
+.beam-synthesis { stroke-width: 1.4; opacity: .22; }
+.beam-agreement { stroke-width: 2; }
+.beam-objection { stroke-width: 2.4; }
+.beam-active { animation: dash-flow 0.8s linear infinite; opacity: 1; }
+.beam-active.beam-synthesis { opacity: .9; }
+.beam-idle { opacity: .08; animation: none; }
+@keyframes dash-flow { to { stroke-dashoffset: -28; } }
 
-/* Beams */
-.beam-flow { animation: dash 1.6s linear infinite; }
-.beam-objection { animation: pulse 1.1s ease-in-out infinite; }
-@keyframes dash { to { stroke-dashoffset: -16 } }
-@keyframes pulse { 0%,100% { opacity: .85 } 50% { opacity: .25 } }
-
-/* Speech clouds */
-.cloud-wrap { pointer-events: none; }
-.speech-cloud {
-  --cloud-accent: #2ad8ff;
-  background: #0f1530; border: 1.5px solid var(--cloud-accent);
-  border-radius: 12px; padding: 6px 7px; font-size: 8.5px; color: #e6ebff;
-  box-shadow: 0 0 12px color-mix(in srgb, var(--cloud-accent) 45%, transparent);
-  position: relative; animation: cloudpop .5s ease-out; min-height: 60px;
+/* ---- Chibi bot unit ---- */
+.bot-slot { position: absolute; transform: translate(-50%, -50%); z-index: 2; }
+.bot-unit { --accent: #ef4444; width: 172px; display: flex; flex-direction: column; align-items: center; text-align: center; }
+.chibi-svg { display: block; margin: 0 auto; }
+.led-eye, .antenna-tip, .core-badge, .hand-left, .hand-right,
+.bot-head-group, .bot-torso-group, .chair-gavel {
+  transform-box: fill-box; transform-origin: center;
 }
-.speech-cloud:after { content:''; position:absolute; bottom:-9px; left:20px; width:0; height:0;
-  border-left:8px solid transparent; border-right:8px solid transparent; border-top:9px solid var(--cloud-accent); }
-.cloud-role { font-weight: 800; letter-spacing: .4px; font-size: 8px; }
-.cloud-text { margin-top: 2px; line-height: 1.35; }
-.cited-chip { background: rgba(255,210,63,.12); color: #ffd978; border:1px solid rgba(255,210,63,.4);
-  border-radius: 5px; padding: 1px 4px; margin-top: 3px; font-size: 7.5px; width: fit-content; }
-@keyframes cloudpop { from { transform: scale(.85); opacity: 0 } to { transform: scale(1); opacity: 1 } }
+.chair-gavel { transform-origin: 134px 98px; }
 
-/* Policy viewer */
+.bot-shadow { animation: shadow-breath 2.4s ease-in-out infinite; }
+@keyframes shadow-breath { 0%,100% { transform: scaleX(1) } 50% { transform: scaleX(.86) } }
+
+/* idle */
+.bot-unit.state-idle .bot-head-group { animation: idle-bob 2.4s ease-in-out infinite; }
+@keyframes idle-bob { 0%,100% { transform: translateY(0) } 50% { transform: translateY(-3px) } }
+
+/* scanning */
+.bot-unit.state-scanning .led-eye { animation: scan-blink 1.1s ease-in-out infinite; }
+.bot-unit.state-scanning .antenna-tip { animation: scan-ant 1.4s ease-in-out infinite; }
+@keyframes scan-blink { 0%,100% { opacity: 1 } 50% { opacity: .25 } }
+@keyframes scan-ant { 0%,100% { transform: scale(1) } 50% { transform: scale(1.6) } }
+
+/* speaking */
+.bot-unit.state-speaking .bot-head-group { animation: idle-bob 1s ease-in-out infinite; }
+.bot-unit.state-speaking .core-badge { animation: core-pulse 0.9s ease-in-out infinite; }
+.bot-unit.state-speaking .antenna-tip { animation: speak-glow 0.8s ease-in-out infinite; }
+.bot-unit.state-speaking .hand-left { animation: float-l 0.7s ease-in-out infinite; }
+.bot-unit.state-speaking .hand-right { animation: float-r 0.7s ease-in-out infinite; }
+@keyframes core-pulse { 0%,100% { transform: scale(1) } 50% { transform: scale(1.35) } }
+@keyframes speak-glow { 0%,100% { filter: drop-shadow(0 0 2px var(--accent)) } 50% { filter: drop-shadow(0 0 10px var(--accent)) } }
+@keyframes float-l { 0%,100% { transform: translateY(0) } 50% { transform: translateY(-8px) } }
+@keyframes float-r { 0%,100% { transform: translateY(-8px) } 50% { transform: translateY(0) } }
+
+/* objecting */
+.bot-unit.state-objecting .bot-head-group { animation: obj-shake 0.3s ease-in-out infinite; }
+.bot-unit.state-objecting .led-eye { animation: obj-flash 0.3s ease-in-out infinite; }
+@keyframes obj-shake { 0%,100% { transform: translateX(0) } 25% { transform: translateX(-3px) } 75% { transform: translateX(3px) } }
+@keyframes obj-flash { 0%,100% { opacity: 1 } 50% { opacity: .15 } }
+
+/* verdict */
+.bot-unit.state-verdict .chair-gavel { animation: gavel-swing 0.75s ease-in-out infinite; }
+.bot-unit.state-verdict .core-badge { animation: core-pulse 1.4s ease-in-out infinite; }
+@keyframes gavel-swing { 0%,100% { transform: rotate(0) } 50% { transform: rotate(-16deg) } }
+
+/* speech cloud */
+.speech-cloud {
+  position: relative; background: rgba(2,6,23,.94); border: 1.5px solid;
+  border-radius: 14px; padding: 8px 10px; font-size: 11px; color: #f1f5f9;
+  max-width: 250px; box-shadow: 0 0 16px rgba(0,0,0,.4); margin-bottom: 8px;
+  text-align: left; line-height: 1.4; animation: cloud-in .4s ease-out;
+}
+@keyframes cloud-in { from { opacity: 0; transform: translateY(6px) } to { opacity: 1; transform: translateY(0) } }
+.speech-cloud:after {
+  content: ''; position: absolute; bottom: -8px; left: 26px; width: 0; height: 0;
+  border-left: 7px solid transparent; border-right: 7px solid transparent;
+  border-top: 8px solid var(--accent, #94a3b8);
+}
+.cloud-speech { display: block; }
+.clause-tag {
+  display: inline-block; margin-top: 4px; background: rgba(255,255,255,.07);
+  color: var(--accent); font-weight: 700; font-family: 'Consolas', monospace;
+  border: 1px solid var(--accent); border-radius: 6px; padding: 0 5px; font-size: 10px;
+}
+
+.bot-label { color: #f1f5f9; font-weight: 800; font-size: 13px; letter-spacing: .5px; margin-top: 4px; }
+.bot-state-badge {
+  font-size: 9px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase;
+  color: var(--accent); background: rgba(255,255,255,.05); border: 1px solid var(--accent);
+  border-radius: 99px; padding: 1px 8px; margin-top: 3px;
+}
+.bot-model { font-size: 9px; color: #94a3b8; margin-top: 2px; letter-spacing: .3px; }
+
+/* ---- Policy viewer ---- */
 .policy-viewer {
   white-space: pre-wrap; max-height: 420px; overflow: auto;
   font-family: 'Consolas', 'Menlo', monospace; font-size: 12px; line-height: 1.6;
   color: #cfd7f0; background: #080b16; border-radius: 10px; padding: 10px;
 }
 .cite-glow {
-  background: rgba(255, 210, 63, .22); color: #ffe08a; font-weight: 700;
-  box-shadow: 0 0 8px rgba(255, 210, 63, .55); border-radius: 3px; padding: 0 2px;
+  background: rgba(245, 158, 11, .22); color: #fcd34d; font-weight: 700;
+  box-shadow: 0 0 8px rgba(245, 158, 11, .55); border-radius: 3px; padding: 0 2px;
   animation: glowpulse 1.8s ease-in-out infinite;
 }
-@keyframes glowpulse { 0%,100% { box-shadow: 0 0 6px rgba(255,210,63,.45) } 50% { box-shadow: 0 0 16px rgba(255,210,63,.9) } }
+@keyframes glowpulse { 0%,100% { box-shadow: 0 0 6px rgba(245,158,11,.45) } 50% { box-shadow: 0 0 16px rgba(245,158,11,.9) } }
 
-/* Dossier */
+/* ---- Dossier ---- */
 .dossier { display: flex; flex-direction: column; gap: 10px; }
 .verdict-banner { border-radius: 14px; padding: 14px; border: 1px solid; }
-.v-sub { background: linear-gradient(135deg, rgba(255,59,92,.25), rgba(120,20,40,.4)); border-color: #ff3b5c; }
-.v-proc { background: linear-gradient(135deg, rgba(255,210,63,.25), rgba(120,90,20,.4)); border-color: #ffd23f; }
-.v-clear { background: linear-gradient(135deg, rgba(57,255,160,.22), rgba(20,90,60,.4)); border-color: #39ffa0; }
+.v-sub { background: linear-gradient(135deg, rgba(239,68,68,.25), rgba(120,20,40,.4)); border-color: #ef4444; }
+.v-proc { background: linear-gradient(135deg, rgba(234,179,8,.25), rgba(120,90,20,.4)); border-color: #eab308; }
+.v-clear { background: linear-gradient(135deg, rgba(20,184,166,.22), rgba(20,90,60,.4)); border-color: #14b8a6; }
 .verdict-label { font-size: 10px; letter-spacing: 2px; color: var(--muted); }
 .verdict-value { font-size: 22px; font-weight: 900; letter-spacing: .5px; margin: 4px 0; }
 .verdict-stats { display: flex; gap: 14px; font-size: 12px; color: var(--muted); }
 .vstat b { color: #fff; }
 .conf-bar { height: 8px; border-radius: 6px; background: rgba(255,255,255,.12); margin-top: 10px; overflow: hidden; }
-.conf-bar > div { height: 100%; background: linear-gradient(90deg, #2ad8ff, #39ffa0); border-radius: 6px; }
+.conf-bar > div { height: 100%; background: linear-gradient(90deg, #14b8a6, #f59e0b); border-radius: 6px; }
 
 .dossier-card { background: var(--panel-bg); border: 1px solid var(--panel-border); border-radius: 12px; padding: 10px 12px; }
 .dossier-card summary { cursor: pointer; font-weight: 700; font-size: 13px; color: #e6ecff; }
@@ -1342,65 +1316,17 @@ h1.app-title {
 .matrix-row { display: flex; gap: 10px; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,.06); }
 .matrix-role { font-weight: 800; min-width: 64px; font-size: 12px; }
 .matrix-concl { font-size: 12px; color: #cfd7f0; line-height: 1.5; }
-.vuln-text { color: #ffb7c4; font-size: 12.5px; line-height: 1.55; margin-top: 4px; }
-.rewrite-text { background: #080b16; border-left: 3px solid #39ffa0; padding: 8px 10px; border-radius: 6px;
+.vuln-text { color: #fecaca; font-size: 12.5px; line-height: 1.55; margin-top: 4px; }
+.rewrite-text { background: #080b16; border-left: 3px solid #14b8a6; padding: 8px 10px; border-radius: 6px;
   font-family: 'Consolas', monospace; font-size: 12px; color: #b8ffdf; margin-top: 4px; line-height: 1.55; }
 
 .empty-note { color: var(--muted); font-size: 12px; font-style: italic; padding: 8px 4px; }
 
-.stance { font-size: 9px; font-weight: 700; border-radius: 6px; padding: 1px 5px; letter-spacing: .5px; }
-.st-pros { color: #ff3b5c; background: rgba(255,59,92,.14); }
-.st-def { color: #2ad8ff; background: rgba(42,216,255,.14); }
-.st-fair { color: #39ffa0; background: rgba(57,255,160,.14); }
-.st-syn { color: #ffd23f; background: rgba(255,210,63,.14); }
+/* ---- Phase 2 roadmap ---- */
+.roadmap { color: #e2e8f0; font-size: 13px; line-height: 1.6; }
+.roadmap li { margin: 4px 0; }
+.roadmap .phase-tag { color: #14b8a6; font-weight: 700; }
 
-/* ---- Stage inspector (staged workflow focus) ---- */
-.stage-inspector { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
-
-/* ---- Kinesic animation states ---- */
-.bot { --accent: #2ad8ff; }
-.kine-aura { opacity: 0; }
-.bot[data-kine="scanning"] .kine-aura { opacity: 0; }
-.bot[data-kine="speaking"] .kine-aura { opacity: .22; animation: aura 1.3s ease-in-out infinite; }
-.bot[data-kine="objecting"] .kine-aura { opacity: .45; animation: aura .5s ease-in-out infinite; }
-.bot[data-kine="verdict_locked"] .kine-aura { opacity: .4; animation: aura 2.2s ease-in-out infinite; }
-@keyframes aura { 0%,100% { transform: scale(.86); opacity: .12 } 50% { transform: scale(1.08); opacity: .5 } }
-
-.bot[data-kine="speaking"] { animation: bob 1.7s ease-in-out infinite; }
-.bot[data-kine="speaking"] .visor { animation: speakvis .5s ease-in-out infinite; }
-.bot[data-kine="speaking"] .antenna-tip { animation: speant .5s ease-in-out infinite; }
-
-.bot[data-kine="objecting"] { animation: shake .35s ease-in-out infinite; }
-.bot[data-kine="objecting"] .visor { animation: objectvis .35s ease-in-out infinite; }
-.bot[data-kine="objecting"] .antenna-tip { animation: objectant .35s ease-in-out infinite; }
-
-.bot[data-kine="verdict_locked"] { animation: none; }
-.bot[data-kine="verdict_locked"] .chair-orb { animation: lockedorb 2s ease-in-out infinite; }
-
-@keyframes speakvis { 0%,100% { opacity: 1 } 50% { opacity: .4 } }
-@keyframes speant { 0%,100% { opacity: 1 } 50% { opacity: .25 } }
-@keyframes objectvis { 0%,100% { fill: #0b1020 } 50% { fill: #ff3b5c } }
-@keyframes objectant { 0%,100% { opacity: 1 } 50% { opacity: .15 } }
-@keyframes shake { 0%,100% { transform: translateX(0) } 25% { transform: translateX(-3px) rotate(-2deg) } 75% { transform: translateX(3px) rotate(2deg) } }
-@keyframes lockedorb { 0%,100% { opacity: 1 } 50% { opacity: .3 } }
-
-/* ---- Model badge under each avatar ---- */
-.model-badge {
-  font-size: 8px; font-weight: 800; letter-spacing: .4px;
-  paint-order: stroke; stroke: rgba(4,6,16,.8); stroke-width: 2.5px;
-  font-family: 'Segoe UI', 'Inter', sans-serif;
-}
-
-/* ---- Workflow beam highlight ---- */
-.beam { transition: opacity .45s ease; }
-.beam-idle { opacity: .1; }
-.beam-active.beam-flow { animation: dash 1.2s linear infinite; }
-.beam-active.beam-objection { animation: pulse .9s ease-in-out infinite; }
-
-/* ---- Focused speech cloud ---- */
-.speech-cloud.cloud-focused { border-width: 2.5px; box-shadow: 0 0 18px color-mix(in srgb, var(--cloud-accent) 70%, transparent); }
-
-/* ---- Dossier download ---- */
 #dossier-dl-row { margin-top: 14px; }
 """
 
@@ -1414,6 +1340,7 @@ def build_ui():
         title="AegisBoard: Multi-Agent Policy & Rulebook Advisory Tribunal",
         css=CSS,
         theme=gr.themes.Base(primary_hue="blue", neutral_hue="slate"),
+        js="() => { document.body.classList.add('dark'); }",
     ) as demo:
         state = gr.State(_default_state())
 
@@ -1424,33 +1351,28 @@ def build_ui():
             """
         )
 
-        # --- Collapsible settings bar (API key + model) ---
-        with gr.Accordion("⚙️ Model & API Settings", open=os.getenv("MODELSCOPE_API_KEY") is None and os.getenv("MODELSCOPE_SDK_TOKEN") is None):
-            with gr.Row():
-                model_dd = gr.Dropdown(
-                    choices=MODELS, value=DEFAULT_MODEL, label="ModelScope Model",
-                    info="Approved ModelScope inference models only.",
-                )
-                api_key_box = gr.Textbox(
-                    label="API Key (optional — leave blank if set via environment)",
-                    type="password",
-                    placeholder="MODELSCOPE_API_KEY / MODELSCOPE_SDK_TOKEN from environment, or paste here",
-                )
-
-        # --- Optional multi-model council routing ---
-        with gr.Accordion("🧩 Multi-Model Council Routing (Optional)", open=False):
-            multi_check = gr.Checkbox(
-                label="Assign Different Approved Models per Bot",
-                value=False,
-                info="When enabled each persona reasons on its own approved ModelScope model "
-                     "(GLM-5.2, DeepSeek-V4, Step-3.5, Qwen3.8). When disabled all four use the primary model.",
+        # --- Settings bar (API key + fixed 4-model routing) ---
+        with gr.Accordion("⚙️ Inference Settings — 4-Model Council Routing",
+                          open=os.getenv("MODELSCOPE_API_KEY") is None and os.getenv("MODELSCOPE_SDK_TOKEN") is None):
+            api_key_box = gr.Textbox(
+                label="API Key (optional — leave blank if set via environment)",
+                type="password",
+                placeholder="MODELSCOPE_API_KEY / MODELSCOPE_SDK_TOKEN from environment, or paste here",
             )
-            with gr.Row():
-                lex_model = gr.Dropdown(choices=MODELS, value=DISTRIBUTED_MODEL_MAP["LEX-01"], label="LEX-01 model")
-                ctx_model = gr.Dropdown(choices=MODELS, value=DISTRIBUTED_MODEL_MAP["CTX-02"], label="CTX-02 model")
-            with gr.Row():
-                eth_model = gr.Dropdown(choices=MODELS, value=DISTRIBUTED_MODEL_MAP["ETH-03"], label="ETH-03 model")
-                chr_model = gr.Dropdown(choices=MODELS, value=DISTRIBUTED_MODEL_MAP["CHR-04"], label="CHR-04 model")
+            gr.HTML(
+                """
+                <div class="roadmap">
+                  <b>Active 4-model runtime routing (with automatic fallback):</b>
+                  <ul>
+                    <li>🔴 <b>LEX-01</b> Strict Rule-Checker → <code>Qwen/Qwen3.8-27B</code></li>
+                    <li>🟢 <b>CTX-02</b> Contextual &amp; Intent Analyst → <code>stepfun-ai/Step-3.5-Flash</code></li>
+                    <li>🟡 <b>ETH-03</b> Ethics &amp; Precedent Evaluator → <code>zai-org/GLM-5.2</code></li>
+                    <li>🟠 <b>CHR-04</b> Board Chair / Chief Synthesizer → <code>deepseek-ai/DeepSeek-V4-Pro-0813</code></li>
+                  </ul>
+                  <span>Fallback pool: <code>zai-org/GLM-5.2</code>, <code>Qwen/Qwen3.8-27B</code>.</span>
+                </div>
+                """
+            )
 
         # --- LEFT / CENTER / RIGHT columns ---
         with gr.Row(equal_height=False):
@@ -1483,11 +1405,21 @@ def build_ui():
                 with gr.Row():
                     theme_dd = gr.Dropdown(choices=THEMES, value=THEMES[0], label="Room Theme")
                     orient_dd = gr.Dropdown(choices=ORIENTATIONS, value=ORIENTATIONS[0], label="Seating Orientation")
-                gr.HTML('<div class="column-title" style="margin-top:6px">🔬 Debate Stage Inspector</div>')
-                focus_radio = gr.Radio(
-                    choices=STAGE_FOCUS_CHOICES, value=STAGE_FOCUS_CHOICES[0],
-                    label="Focus workflow stage", elem_classes="stage-inspector",
-                )
+                with gr.Accordion("🚀 Phase 2 Roadmap Preview (v2.0)", open=False):
+                    gr.HTML(
+                        """
+                        <div class="roadmap">
+                          <span class="phase-tag">V2.0 · Three.js / WebGL 3D Courtroom</span>
+                          <ul>
+                            <li>Real-time 3D astro-bot meshes with skeletal rigging &amp; lip-sync.</li>
+                            <li>Orbital camera fly-throughs per debate stage (LEX → CTX → ETH → CHR).</li>
+                            <li>Volumetric beam VFX, dynamic floor lighting &amp; particle objections.</li>
+                            <li>WebSocket streaming tokens straight to the bench.</li>
+                          </ul>
+                          <span class="phase-tag">V1.0 (this build)</span> → Pure SVG/CSS chibi stage, no WebGL dependency.
+                        </div>
+                        """
+                    )
                 stage_html = gr.HTML(render_stage([], {}, THEMES[0], ORIENTATIONS[0]))
                 gr.HTML('<div class="column-title" style="margin-top:14px">🎤 Interactive Consultation Bar</div>')
                 consult_md = gr.Markdown("The Board Chair's clarifying questions will appear here.")
@@ -1508,15 +1440,12 @@ def build_ui():
                 )
 
         # --- Events ---
-        preset_dd.change(
-            fn=load_preset, inputs=[preset_dd], outputs=[rulebook_tb, case_tb]
-        )
+        preset_dd.change(fn=load_preset, inputs=[preset_dd], outputs=[rulebook_tb, case_tb])
         file_up.change(fn=handle_file, inputs=[file_up], outputs=[rulebook_tb])
 
         convene_btn.click(
             fn=convene_board,
-            inputs=[rulebook_tb, case_tb, model_dd, api_key_box, theme_dd, orient_dd,
-                    multi_check, lex_model, ctx_model, eth_model, chr_model, state],
+            inputs=[rulebook_tb, case_tb, api_key_box, theme_dd, orient_dd, state],
             outputs=[warn_html, stage_html, policy_html, consult_md, followup_tb, verdict_html, state],
         )
 
@@ -1526,29 +1455,12 @@ def build_ui():
             outputs=[consult_md, followup_tb, state, followup_md, stage_html, policy_html, verdict_html],
         )
 
-        focus_radio.change(
-            fn=focus_stage,
-            inputs=[focus_radio, state],
-            outputs=[stage_html, state],
-        )
+        dossier_dl.click(fn=download_dossier, inputs=[state], outputs=[dossier_dl])
 
-        dossier_dl.click(
-            fn=download_dossier,
-            inputs=[state],
-            outputs=[dossier_dl],
-        )
+        theme_dd.change(fn=theme_orient_store, inputs=[theme_dd, orient_dd, state], outputs=[stage_html, state])
+        orient_dd.change(fn=theme_orient_store, inputs=[theme_dd, orient_dd, state], outputs=[stage_html, state])
 
-        theme_dd.change(
-            fn=_theme_and_orientation_store,
-            inputs=[theme_dd, orient_dd, state],
-            outputs=[stage_html, state],
-        )
-        orient_dd.change(
-            fn=_theme_and_orientation_store,
-            inputs=[theme_dd, orient_dd, state],
-            outputs=[stage_html, state],
-        )
-
+    demo.queue()
     return demo
 
 
